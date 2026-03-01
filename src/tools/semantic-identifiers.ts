@@ -9,6 +9,8 @@ import {
   getEmbeddingBatchSize,
   loadEmbeddingCache,
   saveEmbeddingCache,
+  truncateQuery,
+  MAX_EMBEDDING_CHARS,
   type EmbeddingCache,
 } from "../core/embeddings.js";
 import { resolve } from "path";
@@ -152,6 +154,46 @@ function removeFileScopedCacheEntries(cache: EmbeddingCache, relativePath: strin
   }
 }
 
+const SEARCH_DOC_PREFIX = "search_document: ";
+
+function buildIdentifierText(
+  name: string,
+  kind: string,
+  relativePath: string,
+  header: string,
+  signature: string,
+  parentName?: string,
+): string {
+  const budget = MAX_EMBEDDING_CHARS - SEARCH_DOC_PREFIX.length;
+
+  // Priority 1: name + kind (highest signal for matching)
+  const nameKind = `${name} ${kind}`;
+  let remaining = budget - nameKind.length;
+
+  // Priority 2: file path + header (disambiguation context)
+  let pathHeader = `${relativePath} ${header}`;
+  if (pathHeader.length > remaining) {
+    pathHeader = pathHeader.slice(0, Math.max(0, remaining));
+  }
+  remaining -= pathHeader.length;
+
+  // Priority 3: signature fills remaining budget
+  let sig = "";
+  if (remaining > 1 && signature.length > 0) {
+    sig = signature.length > remaining ? signature.slice(0, remaining) : signature;
+    remaining -= sig.length;
+  }
+
+  // Priority 4: parentName if room remains
+  let parent = "";
+  if (remaining > 1 && parentName) {
+    parent = parentName.length > remaining ? parentName.slice(0, remaining) : parentName;
+  }
+
+  const parts = [nameKind, pathHeader, sig, parent].filter(Boolean);
+  return SEARCH_DOC_PREFIX + parts.join(" ");
+}
+
 async function buildIdentifierDocsForFile(rootDir: string, relativePath: string): Promise<IdentifierDoc[]> {
   const normalized = normalizeRelativePath(relativePath);
   const fullPath = resolve(rootDir, normalized);
@@ -170,7 +212,7 @@ async function buildIdentifierDocsForFile(rootDir: string, relativePath: string)
       endLine: symbol.endLine,
       signature: symbol.signature,
       parentName: symbol.parentName,
-      text: `${symbol.name} ${symbol.kind} ${symbol.signature} ${normalized} ${analysis.header} ${symbol.parentName ?? ""}`,
+      text: buildIdentifierText(symbol.name, symbol.kind, normalized, analysis.header, symbol.signature, symbol.parentName),
     }));
   } catch {
     return [];
@@ -204,7 +246,7 @@ async function buildIdentifierIndex(rootDir: string): Promise<IdentifierIndex> {
           endLine: symbol.endLine,
           signature: symbol.signature,
           parentName: symbol.parentName,
-          text: `${symbol.name} ${symbol.kind} ${symbol.signature} ${file.relativePath} ${analysis.header} ${symbol.parentName ?? ""}`,
+          text: buildIdentifierText(symbol.name, symbol.kind, file.relativePath, analysis.header, symbol.signature, symbol.parentName),
         });
       }
     } catch {
@@ -356,7 +398,7 @@ export async function semanticIdentifierSearch(options: SemanticIdentifierSearch
     return "No supported identifiers found for semantic identifier search.";
   }
 
-  const [queryVec] = await fetchEmbedding(options.query);
+  const [queryVec] = await fetchEmbedding(truncateQuery(options.query));
   const queryTerms = new Set(splitTerms(options.query));
 
   const scored: RankedIdentifier[] = [];

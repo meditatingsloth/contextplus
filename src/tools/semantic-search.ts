@@ -4,6 +4,7 @@
 import { walkDirectory } from "../core/walker.js";
 import { analyzeFile, flattenSymbols, isSupportedFile } from "../core/parser.js";
 import {
+  buildEmbeddingText,
   fetchEmbedding,
   getEmbeddingBatchSize,
   loadEmbeddingCache,
@@ -179,7 +180,7 @@ export async function refreshFileSearchEmbeddings(options: { rootDir: string; re
       continue;
     }
 
-    const text = `${doc.header} ${doc.symbols.join(" ")} ${doc.content}`;
+    const text = buildEmbeddingText(doc);
     const hash = hashContent(text);
     if (cache[relativePath]?.hash === hash) continue;
     pending.push({ path: relativePath, hash, text });

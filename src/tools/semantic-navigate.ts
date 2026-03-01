@@ -4,7 +4,7 @@
 import { Ollama } from "ollama";
 import { walkDirectory } from "../core/walker.js";
 import { analyzeFile, flattenSymbols, isSupportedFile } from "../core/parser.js";
-import { fetchEmbedding } from "../core/embeddings.js";
+import { fetchEmbedding, MAX_EMBEDDING_CHARS } from "../core/embeddings.js";
 import { readFile } from "fs/promises";
 import { spectralCluster, findPathPattern } from "../core/clustering.js";
 
@@ -31,6 +31,8 @@ interface ClusterNode {
 const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL ?? "nomic-embed-text";
 const CHAT_MODEL = process.env.OLLAMA_CHAT_MODEL ?? "llama3.2";
 const MAX_FILES_PER_LEAF = 20;
+const SEARCH_DOC_PREFIX = "search_document: ";
+const MAX_LABEL_PROMPT_CHARS = 6000;
 
 const ollama = new Ollama();
 
@@ -65,6 +67,30 @@ function formatLineRange(line: number, endLine: number): string {
   return endLine > line ? `L${line}-L${endLine}` : `L${line}`;
 }
 
+function buildNavigateEmbedText(f: FileInfo): string {
+  const budget = MAX_EMBEDDING_CHARS - SEARCH_DOC_PREFIX.length;
+
+  // Priority 1: header (file purpose, highest signal)
+  const header = f.header.slice(0, Math.min(f.header.length, budget));
+  let remaining = budget - header.length;
+
+  // Priority 2: relativePath (location context)
+  let path = "";
+  if (remaining > 1) {
+    path = f.relativePath.length > remaining ? f.relativePath.slice(0, remaining) : f.relativePath;
+    remaining -= path.length;
+  }
+
+  // Priority 3: content fills remainder
+  let content = "";
+  if (remaining > 1 && f.content.length > 0) {
+    content = f.content.length > remaining ? f.content.slice(0, remaining) : f.content;
+  }
+
+  const parts = [header, path, content].filter(Boolean);
+  return SEARCH_DOC_PREFIX + parts.join(" ");
+}
+
 async function labelSiblingClusters(clusters: { files: FileInfo[]; pathPattern: string | null }[]): Promise<string[]> {
   if (clusters.length === 0) return [];
   if (clusters.length === 1) {
@@ -73,10 +99,23 @@ async function labelSiblingClusters(clusters: { files: FileInfo[]; pathPattern: 
     return [clusters[0].files.map((f) => f.relativePath.split("/").pop()).join(", ").substring(0, 40)];
   }
 
+  const perClusterBudget = Math.floor(MAX_LABEL_PROMPT_CHARS / clusters.length);
   const clusterDescriptions = clusters.map((c, i) => {
-    const fileList = c.files.map((f) => `${f.relativePath}: ${f.header || "no description"}`).join("\n  ");
     const pattern = c.pathPattern ? ` (pattern: ${c.pathPattern})` : "";
-    return `Cluster ${i + 1}${pattern}:\n  ${fileList}`;
+    const prefix = `Cluster ${i + 1}${pattern}:\n  `;
+    let used = prefix.length;
+    const fileLines: string[] = [];
+    for (const f of c.files) {
+      const entry = `${f.relativePath}: ${f.header || "no description"}`;
+      if (used + entry.length + 3 > perClusterBudget && fileLines.length > 0) {
+        const remaining = c.files.length - fileLines.length;
+        fileLines.push(`... and ${remaining} more files`);
+        break;
+      }
+      fileLines.push(entry);
+      used += entry.length + 3;
+    }
+    return `${prefix}${fileLines.join("\n  ")}`;
   });
 
   const prompt = `You are labeling clusters of code files. For each cluster below, produce EXACTLY one JSON array of objects, each with:
@@ -205,7 +244,7 @@ export async function semanticNavigate(options: SemanticNavigateOptions): Promis
 
   if (files.length === 0) return "Could not read any source files.";
 
-  const embedTexts = files.map((f) => `${f.header} ${f.relativePath} ${f.content}`);
+  const embedTexts = files.map((f) => buildNavigateEmbedText(f));
 
   let vectors: number[][];
   try {

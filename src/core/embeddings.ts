@@ -64,6 +64,13 @@ const MIN_EMBED_BATCH_SIZE = 5;
 const MAX_EMBED_BATCH_SIZE = 10;
 const DEFAULT_EMBED_BATCH_SIZE = 8;
 
+export const MAX_EMBEDDING_CHARS = 6000;
+const HEADER_BUDGET = 300;
+const SYMBOL_NAMES_BUDGET = 2000;
+const QUERY_MAX_CHARS = 1000;
+const SEARCH_DOC_PREFIX = "search_document: ";
+const SEARCH_QUERY_PREFIX = "search_query: ";
+
 const ollama = new Ollama();
 
 function toIntegerOr(value: string | undefined, fallback: number): number {
@@ -86,11 +93,43 @@ export async function fetchEmbedding(input: string | string[]): Promise<number[]
 
   for (let i = 0; i < inputs.length; i += batchSize) {
     const batch = inputs.slice(i, i + batchSize);
-    const response = await ollama.embed({ model: EMBED_MODEL, input: batch });
+    const response = await ollama.embed({ model: EMBED_MODEL, input: batch, truncate: true });
     embeddings.push(...response.embeddings);
   }
 
   return embeddings;
+}
+
+export function buildEmbeddingText(doc: SearchDocument): string {
+  const budget = MAX_EMBEDDING_CHARS - SEARCH_DOC_PREFIX.length;
+
+  // Priority 1: Header (highest per-token signal)
+  const header = doc.header.slice(0, HEADER_BUDGET);
+  let remaining = budget - header.length - 1;
+
+  // Priority 2: Symbol names (compact, high signal)
+  let symbolNames = doc.symbols.join(" ");
+  if (symbolNames.length > Math.min(SYMBOL_NAMES_BUDGET, remaining)) {
+    const limit = Math.min(SYMBOL_NAMES_BUDGET, remaining);
+    symbolNames = symbolNames.slice(0, limit);
+    const lastSpace = symbolNames.lastIndexOf(" ");
+    if (lastSpace > 0) symbolNames = symbolNames.slice(0, lastSpace);
+  }
+  remaining -= symbolNames.length + 1;
+
+  // Priority 3: Content/signatures fill remainder
+  let content = "";
+  if (remaining > 0 && doc.content.length > 0) {
+    content = doc.content.length > remaining ? doc.content.slice(0, remaining) : doc.content;
+  }
+
+  const parts = [header, symbolNames, content].filter(Boolean);
+  return SEARCH_DOC_PREFIX + parts.join(" ");
+}
+
+export function truncateQuery(query: string): string {
+  const truncated = query.length > QUERY_MAX_CHARS ? query.slice(0, QUERY_MAX_CHARS) : query;
+  return SEARCH_QUERY_PREFIX + truncated;
 }
 
 function hashContent(text: string): string {
@@ -235,7 +274,7 @@ export class SearchIndex {
 
     for (let i = 0; i < docs.length; i++) {
       const doc = docs[i];
-      const text = `${doc.header} ${doc.symbols.join(" ")} ${doc.content}`;
+      const text = buildEmbeddingText(doc);
       const hash = hashContent(text);
 
       if (cache[doc.path]?.hash === hash) {
@@ -261,7 +300,7 @@ export class SearchIndex {
 
   async search(query: string, optionsOrTopK?: number | SearchQueryOptions): Promise<SearchResult[]> {
     const options = resolveSearchOptions(optionsOrTopK);
-    const [queryVec] = await fetchEmbedding(query);
+    const [queryVec] = await fetchEmbedding(truncateQuery(query));
     const queryTerms = new Set(splitCamelCase(query));
     const scores: {
       idx: number;
