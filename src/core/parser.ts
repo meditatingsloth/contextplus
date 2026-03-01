@@ -4,6 +4,7 @@
 import { readFile } from "fs/promises";
 import { extname } from "path";
 import { parseWithTreeSitter, getSupportedExtensions } from "./tree-sitter.js";
+import { extractMarkdownHeadings, buildHeadingTree, buildMarkdownHeader } from "./markdown.js";
 
 export enum SymbolKind {
   Function = "function",
@@ -17,6 +18,7 @@ export enum SymbolKind {
   Const = "const",
   Variable = "variable",
   Export = "export",
+  Section = "section",
 }
 
 export interface CodeSymbol {
@@ -64,6 +66,7 @@ const LANG_MAP: Record<string, string> = {
   ".kt": "kotlin",
   ".lua": "lua",
   ".zig": "zig",
+  ".md": "markdown",
 };
 
 const TS_PATTERNS: RegExp[] = [
@@ -305,6 +308,11 @@ function parseJava(lines: string[]): CodeSymbol[] {
   return symbols;
 }
 
+function parseMarkdown(lines: string[]): CodeSymbol[] {
+  const headings = extractMarkdownHeadings(lines);
+  return buildHeadingTree(headings, lines.length);
+}
+
 function parseGeneric(lines: string[]): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
   const genericPatterns = [
@@ -348,13 +356,19 @@ export async function analyzeFile(filePath: string): Promise<FileAnalysis> {
       java: parseJava,
       csharp: parseJava,
       kotlin: parseJava,
+      markdown: parseMarkdown,
     };
     symbols = (parsers[lang ?? ""] ?? parseGeneric)(lines);
   }
 
+  // Use markdown-specific header for .md files
+  const header = ext === ".md"
+    ? buildMarkdownHeader(extractMarkdownHeadings(lines))
+    : extractHeader(lines);
+
   return {
     path: filePath,
-    header: extractHeader(lines),
+    header,
     symbols,
     lineCount: lines.length,
   };
@@ -366,7 +380,7 @@ export function formatSymbol(sym: CodeSymbol, indent: number = 0): string {
   const lineLabel = sym.endLine > sym.line ? `L${sym.line}-L${sym.endLine}` : `L${sym.line}`;
   let result = `${prefix}${kindLabel}: ${sym.name} (${lineLabel})`;
 
-  if (sym.kind === SymbolKind.Function || sym.kind === SymbolKind.Method) {
+  if (sym.kind === SymbolKind.Function || sym.kind === SymbolKind.Method || sym.kind === SymbolKind.Section) {
     result = `${prefix}${kindLabel}: ${sym.signature} (${lineLabel})`;
   }
 

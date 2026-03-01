@@ -46,8 +46,8 @@ describe("parser", () => {
       assert.equal(isSupportedFile("app.swift"), true);
     });
 
-    it("returns false for unsupported extensions", () => {
-      assert.equal(isSupportedFile("readme.md"), false);
+    it("returns true for markdown files", () => {
+      assert.equal(isSupportedFile("readme.md"), true);
     });
 
     it("returns false for image files", () => {
@@ -235,6 +235,61 @@ describe("parser", () => {
       };
       const result = formatSymbol(sym, 2);
       assert.ok(result.startsWith("    "));
+    });
+  });
+
+  describe("analyzeFile - Markdown", () => {
+    const mdFile = join(FIXTURE_DIR, "sample.md");
+
+    it("extracts headings as Section symbols", async () => {
+      await writeFile(
+        mdFile,
+        "# My Project\n\nIntro text\n\n## Installation\n\nInstall steps\n\n## Usage\n\nUsage info\n\n### Advanced\n\nAdvanced usage\n",
+      );
+      const result = await analyzeFile(mdFile);
+      assert.ok(result.symbols.length >= 1);
+      const topLevel = result.symbols[0];
+      assert.equal(topLevel.name, "My Project");
+      assert.equal(topLevel.kind, SymbolKind.Section);
+      assert.equal(topLevel.signature, "# My Project");
+      // Installation and Usage should be children of My Project
+      assert.ok(topLevel.children.length >= 2);
+      const install = topLevel.children.find((s) => s.name === "Installation");
+      assert.ok(install);
+      assert.equal(install.kind, SymbolKind.Section);
+    });
+
+    it("builds structured header for markdown", async () => {
+      await writeFile(
+        mdFile,
+        "# API Reference\n\n## Authentication\n\n## Endpoints\n\n## Errors\n",
+      );
+      const result = await analyzeFile(mdFile);
+      assert.ok(result.header.includes("API Reference"));
+      assert.ok(result.header.includes("Authentication"));
+      assert.ok(result.header.includes("Endpoints"));
+    });
+
+    it("handles markdown with no headings", async () => {
+      await writeFile(mdFile, "Just plain text\nwith no headings\n");
+      const result = await analyzeFile(mdFile);
+      assert.equal(result.symbols.length, 0);
+    });
+  });
+
+  describe("formatSymbol - Section", () => {
+    it("formats a section symbol with signature", () => {
+      const sym = {
+        name: "Installation",
+        kind: SymbolKind.Section,
+        line: 5,
+        endLine: 10,
+        signature: "## Installation",
+        children: [],
+      };
+      const result = formatSymbol(sym);
+      assert.ok(result.includes("## Installation"));
+      assert.ok(result.includes("L5-L10"));
     });
   });
 

@@ -3,7 +3,7 @@
 
 import { readFile } from "fs/promises";
 import { walkDirectory } from "../core/walker.js";
-import { analyzeFile, flattenSymbols, isSupportedFile } from "../core/parser.js";
+import { analyzeFile, flattenSymbols, isSupportedFile, SymbolKind } from "../core/parser.js";
 import {
   fetchEmbedding,
   getEmbeddingBatchSize,
@@ -201,7 +201,7 @@ async function buildIdentifierDocsForFile(rootDir: string, relativePath: string)
 
   try {
     const analysis = await analyzeFile(fullPath);
-    const flat = flattenSymbols(analysis.symbols);
+    const flat = flattenSymbols(analysis.symbols).filter((s) => s.kind !== SymbolKind.Section);
     return flat.map((symbol) => ({
       id: `${normalized}:${symbol.name}:${symbol.line}`,
       path: normalized,
@@ -234,7 +234,7 @@ async function buildIdentifierIndex(rootDir: string): Promise<IdentifierIndex> {
       const content = await readFile(file.path, "utf-8");
       fileLines.set(file.relativePath, content.split("\n"));
       const analysis = await analyzeFile(file.path);
-      const flat = flattenSymbols(analysis.symbols);
+      const flat = flattenSymbols(analysis.symbols).filter((s) => s.kind !== SymbolKind.Section);
       for (const symbol of flat) {
         docs.push({
           id: `${file.relativePath}:${symbol.name}:${symbol.line}`,
