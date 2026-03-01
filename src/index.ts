@@ -134,8 +134,8 @@ server.tool(
   "Uses embeddings over symbol signatures and source context, then returns line-numbered definition/call chains.",
   {
     query: z.string().describe("Natural language intent to match identifiers and usages."),
-    top_k: z.number().optional().describe("How many identifiers to return. Default: 5."),
-    top_calls_per_identifier: z.number().optional().describe("How many ranked call sites per identifier. Default: 10."),
+    top_k: z.union([z.number(), z.string()]).optional().describe("How many identifiers to return. Default: 5."),
+    top_calls_per_identifier: z.union([z.number(), z.string()]).optional().describe("How many ranked call sites per identifier. Default: 10."),
     include_kinds: z.array(z.string()).optional().describe("Optional kinds filter, e.g. [\"function\", \"method\", \"variable\"]."),
     semantic_weight: z.number().optional().describe("Weight for semantic similarity score. Default: 0.78."),
     keyword_weight: z.number().optional().describe("Weight for keyword overlap score. Default: 0.22."),
@@ -146,8 +146,8 @@ server.tool(
       text: await semanticIdentifierSearch({
         rootDir: ROOT_DIR,
         query,
-        topK: top_k,
-        topCallsPerIdentifier: top_calls_per_identifier,
+        topK: top_k != null ? Number(top_k) : undefined,
+        topCallsPerIdentifier: top_calls_per_identifier != null ? Number(top_calls_per_identifier) : undefined,
         includeKinds: include_kinds,
         semanticWeight: semantic_weight,
         keywordWeight: keyword_weight,
@@ -177,7 +177,7 @@ server.tool(
   "Example: searching 'user authentication' finds files about login, sessions, JWT even if those exact words aren't used, with matched definition lines.",
   {
     query: z.string().describe("Natural language description of what you're looking for. Example: 'how are transactions signed'"),
-    top_k: z.number().optional().describe("Number of matches to return. Default: 5."),
+    top_k: z.union([z.number(), z.string()]).optional().describe("Number of matches to return. Default: 5."),
     semantic_weight: z.number().optional().describe("Weight for embedding similarity in hybrid ranking. Default: 0.72."),
     keyword_weight: z.number().optional().describe("Weight for keyword overlap in hybrid ranking. Default: 0.28."),
     min_semantic_score: z.number().optional().describe("Minimum semantic score filter. Accepts 0-1 or 0-100."),
@@ -202,7 +202,7 @@ server.tool(
       text: await semanticCodeSearch({
         rootDir: ROOT_DIR,
         query,
-        topK: top_k,
+        topK: top_k != null ? Number(top_k) : undefined,
         semanticWeight: semantic_weight,
         keywordWeight: keyword_weight,
         minSemanticScore: min_semantic_score,
